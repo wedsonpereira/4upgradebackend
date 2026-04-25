@@ -5,8 +5,8 @@ const app=express();
 const mailer=require('nodemailer');
 const cors=require('cors');
 
-const smtpUser = process.env.SMTP_USER || 'mailto4upgrade@gmail.com';
-const smtpPass = process.env.SMTP_PASS || 'aptxmvgsdqexgecv';
+const smtpUser = process.env.SMTP_USER
+const smtpPass = process.env.SMTP_PASS
 const inboxEmail = process.env.INBOX_EMAIL || smtpUser;
 const port = Number(process.env.PORT || 3000);
 const escapeHtml = (value='') => String(value)
