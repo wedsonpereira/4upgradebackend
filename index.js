@@ -21,7 +21,7 @@ app.listen(port,()=>{
 });
 
 app.use(cors({
-    origin:'*',
+    origin:'https://4upgrade.in',
     methods:['GET','POST']
 }));
 app.use(express.json());
