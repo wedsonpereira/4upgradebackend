@@ -1,137 +1,225 @@
-require('dotenv').config();
+import "dotenv/config";
+import express from "express";
+import cors from "cors";
+import nodemailer from "nodemailer";
+import { z } from "zod";
 
-const express=require('express');
-const app=express();
-const mailer=require('nodemailer');
-const cors=require('cors');
+// ─── Environment ──────────────────────────────────────────────────────────────
+const {
+  PORT = 4000,
+  CORS_ORIGIN,
+  SMTP_HOST,
+  SMTP_PORT,
+  SMTP_SECURE,
+  SMTP_USER,
+  SMTP_PASS,
+  RECIPIENT_EMAIL,
+  FROM_NAME = "4UPGRADE Website",
+} = process.env;
 
-const smtpUser = process.env.SMTP_USER
-const smtpPass = process.env.SMTP_PASS
-const inboxEmail = process.env.INBOX_EMAIL || smtpUser;
-const port = Number(process.env.PORT || 3000);
-const escapeHtml = (value='') => String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+// Fail fast if critical env vars are missing
+const required = { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, RECIPIENT_EMAIL };
+const missing = Object.entries(required)
+  .filter(([, v]) => !v)
+  .map(([k]) => k);
 
-app.listen(port,()=>{
-    console.log(`Server is running on port ${port}`);
+if (missing.length) {
+  console.error(`❌  Missing required environment variables: ${missing.join(", ")}`);
+  process.exit(1);
+}
+
+// ─── Nodemailer transporter ───────────────────────────────────────────────────
+const transporter = nodemailer.createTransport({
+  host: SMTP_HOST,
+  port: Number(SMTP_PORT),
+  secure: SMTP_SECURE === "true", // true for port 465, false for 587
+  auth: {
+    user: SMTP_USER,
+    pass: SMTP_PASS,
+  },
 });
 
-app.use(cors({
-    origin:'https://4upgrade.in',
-    methods:['GET','POST']
-}));
+// ─── Validation schema (mirrors the frontend) ────────────────────────────────
+const contactSchema = z.object({
+  name: z.string().trim().min(2, "Name too short").max(80),
+  email: z.string().trim().email("Invalid email").max(160),
+  phone: z.string().trim().min(7, "Phone too short").max(20),
+  stage: z.string().trim().min(1, "Stage is required"),
+  interests: z.array(z.string()).min(1, "At least one interest required"),
+  message: z.string().trim().max(600).optional(),
+});
+
+// ─── Express app ─────────────────────────────────────────────────────────────
+const app = express();
+
 app.use(express.json());
+app.use(
+  cors({
+    origin: CORS_ORIGIN || "*",
+    methods: ["POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type"],
+  })
+);
 
-const transporter=mailer.createTransport({
-    host: process.env.SMTP_HOST || 'smtp.gmail.com',
-    port: Number(process.env.SMTP_PORT || 587),
-    secure: false,
-    auth:{
-        user:smtpUser,
-        pass:smtpPass
-    }
+// ── Health check ──────────────────────────────────────────────────────────────
+app.get("/health", (_req, res) => {
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-app.get('/',(req,res)=>{
-    res.send('Email sending server is running');
-});
+// ── Contact form endpoint ─────────────────────────────────────────────────────
+app.post("/api/contact", async (req, res) => {
+  // 1. Validate input
+  const parsed = contactSchema.safeParse(req.body);
+  if (!parsed.success) {
+    const errors = {};
+    parsed.error.issues.forEach((issue) => {
+      errors[issue.path[0]] = issue.message;
+    });
+    return res.status(422).json({ success: false, errors });
+  }
 
-app.post('/send-email',(req,res)=>{
-    const { name, phone, email, status, helpNeeded, helps } = req.body || {};
-    const selectedHelp = Array.isArray(helpNeeded)
-        ? helpNeeded
-        : Array.isArray(helps)
-            ? helps
-            : [];
+  const { name, email, phone, stage, interests, message } = parsed.data;
 
-    if(!name || !phone || !email || !status || selectedHelp.length === 0){
-        return res.status(400).send('Missing required fields: name, phone, email, status, helpNeeded');
-    }
+  // 2. Build email content
+  const interestList = interests.map((i) => `• ${i}`).join("\n");
 
-    console.log('Received form submission from', email);
+  // ── Acknowledgment Email (sent to client) ──────────────────────────────────
+  const ackTextBody = `
+Hi ${name},
 
-    const subject = `New guidance request from ${name}`;
-    const text = [
-        `Name: ${name}`,
-        `Phone: ${phone}`,
-        `Email: ${email}`,
-        `Current status: ${status}`,
-        `Help needed: ${selectedHelp.join(', ')}`
-    ].join('\n');
-    const html = `
+Thanks for reaching out to 4upgrade! We’ve received your enquiry and a mentor will get back to you soon.
+
+If you have any questions in the meantime, reply to this email or reach us at hello@4upgrade.in.
+
+Warm regards,
+The 4UPGRADE Team
+https://4upgrade.in
+`.trim();
+
+  const ackHtmlBody = `
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${escapeHtml(subject)}</title>
+  <meta charset="utf-8" />
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f0fdfa; margin: 0; padding: 40px 16px; }
+    .card { background: #fff; border-radius: 14px; max-width: 560px; margin: 0 auto; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+    .header { background: linear-gradient(135deg, #0d9488, #0f766e); padding: 32px 40px; }
+    .header h1 { margin: 0; font-size: 22px; color: #fff; font-weight: 700; }
+    .header p { margin: 6px 0 0; font-size: 14px; color: rgba(255,255,255,.75); }
+    .body { padding: 32px 40px; }
+    .greeting { font-size: 16px; color: #0f172a; margin: 0 0 20px; }
+    .note { margin-top: 24px; font-size: 14px; color: #6b7280; line-height: 1.6; }
+    .footer { padding: 20px 40px; border-top: 1px solid #f1f5f9; font-size: 12px; color: #9ca3af; text-align: center; }
+  </style>
 </head>
-<body style="margin:0;padding:24px;background-color:#f4f7fb;font-family:Arial,sans-serif;color:#1f2937;">
-  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">
-    <tr>
-      <td align="center">
-        <table role="presentation" width="680" cellspacing="0" cellpadding="0" style="width:100%;max-width:680px;border-collapse:collapse;background-color:#ffffff;border:1px solid #dbe3ee;border-radius:16px;overflow:hidden;">
-          <tr>
-            <td style="padding:28px 32px;background-color:#0f172a;color:#ffffff;">
-              <div style="font-size:12px;letter-spacing:1.2px;text-transform:uppercase;opacity:0.75;">4Upgrade</div>
-              <h1 style="margin:10px 0 0;font-size:24px;line-height:32px;font-weight:700;">New Guidance Request</h1>
-              <p style="margin:10px 0 0;font-size:14px;line-height:22px;color:#cbd5e1;">A new enquiry has been submitted through the website form.</p>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:32px;">
-              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;border:1px solid #dbe3ee;border-radius:12px;overflow:hidden;">
-                <tr style="background-color:#eff6ff;">
-                  <th align="left" style="padding:14px 16px;border-bottom:1px solid #dbe3ee;font-size:13px;line-height:20px;color:#334155;width:220px;">Field</th>
-                  <th align="left" style="padding:14px 16px;border-bottom:1px solid #dbe3ee;font-size:13px;line-height:20px;color:#334155;">Details</th>
-                </tr>
-                <tr>
-                  <td style="padding:14px 16px;border-bottom:1px solid #e5e7eb;font-size:14px;line-height:22px;font-weight:600;color:#0f172a;">Full name</td>
-                  <td style="padding:14px 16px;border-bottom:1px solid #e5e7eb;font-size:14px;line-height:22px;color:#334155;">${escapeHtml(name)}</td>
-                </tr>
-                <tr>
-                  <td style="padding:14px 16px;border-bottom:1px solid #e5e7eb;font-size:14px;line-height:22px;font-weight:600;color:#0f172a;">Phone</td>
-                  <td style="padding:14px 16px;border-bottom:1px solid #e5e7eb;font-size:14px;line-height:22px;color:#334155;">${escapeHtml(phone)}</td>
-                </tr>
-                <tr>
-                  <td style="padding:14px 16px;border-bottom:1px solid #e5e7eb;font-size:14px;line-height:22px;font-weight:600;color:#0f172a;">Email</td>
-                  <td style="padding:14px 16px;border-bottom:1px solid #e5e7eb;font-size:14px;line-height:22px;color:#334155;">${escapeHtml(email)}</td>
-                </tr>
-                <tr>
-                  <td style="padding:14px 16px;border-bottom:1px solid #e5e7eb;font-size:14px;line-height:22px;font-weight:600;color:#0f172a;">Current status</td>
-                  <td style="padding:14px 16px;border-bottom:1px solid #e5e7eb;font-size:14px;line-height:22px;color:#334155;">${escapeHtml(status)}</td>
-                </tr>
-                <tr>
-                  <td style="padding:14px 16px;font-size:14px;line-height:22px;font-weight:600;color:#0f172a;">Help needed</td>
-                  <td style="padding:14px 16px;font-size:14px;line-height:22px;color:#334155;">${escapeHtml(selectedHelp.join(', '))}</td>
-                </tr>
-              </table>
-              <p style="margin:20px 0 0;font-size:12px;line-height:18px;color:#64748b;">Reply directly to this email to respond to ${escapeHtml(name)} at ${escapeHtml(email)}.</p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
+<body>
+  <div class="card">
+    <div class="header">
+      <h1>We’ve received your enquiry ✔️</h1>
+      <p>4UPGRADE Career Readiness</p>
+    </div>
+    <div class="body">
+      <p class="greeting">Hi ${name},</p>
+      <p style="font-size:14px;color:#374151;margin:0 0 24px;line-height:1.6;">
+        Thanks for reaching out! We’ve received your request, and a 4UPGRADE mentor will get back to you within <strong>one working day</strong>.
+      </p>
+      <p class="note">
+        If you have any questions in the meantime, reply to this email or reach us at
+        <a href="mailto:hello@4upgrade.in" style="color:#0d9488;">hello@4upgrade.in</a>.
+      </p>
+    </div>
+    <div class="footer">4UPGRADE &middot; <a href="https://4upgrade.in" style="color:#0d9488;">4upgrade.in</a></div>
+  </div>
 </body>
-</html>`;
+</html>
+`.trim();
 
-    transporter.sendMail({
-        from: smtpUser,
-        to: inboxEmail,
-        replyTo: email,
-        subject,
-        text,
-        html
-}).then(info=>{
-    console.log('Email sent: ' + info.response);
-    res.send('Email sent successfully');
-}).catch(error=>{
-    console.error('Error sending email: ' + error);
-    res.status(500).send('Error sending email');
+  // ── Lead Notification Email (sent to internal team) ────────────────────────
+  const leadTextBody = `
+New Enquiry Received on 4UPGRADE Website!
+──────────────────────────────────
+Name:      ${name}
+Email:     ${email}
+Phone:     ${phone}
+Stage:     ${stage}
+Interests: ${interests.join(", ")}
+${message ? `\nMessage:\n${message}` : ""}
+──────────────────────────────────
+`.trim();
+
+  const leadHtmlBody = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f8fafc; margin: 0; padding: 40px 16px; }
+    .card { background: #fff; border-radius: 14px; max-width: 560px; margin: 0 auto; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+    .header { background: #0f172a; padding: 32px 40px; }
+    .header h1 { margin: 0; font-size: 20px; color: #fff; font-weight: 700; }
+    .header p { margin: 6px 0 0; font-size: 14px; color: rgba(255,255,255,.75); }
+    .body { padding: 32px 40px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; color: #374151; }
+    td { padding: 9px 0; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
+    td:first-child { font-weight: 600; color: #6b7280; width: 110px; }
+    .message-box { margin-top: 20px; padding: 14px 16px; background: #f8fafc; border-left: 3px solid #64748b; border-radius: 6px; font-size: 14px; color: #374151; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <h1>New Lead Notification 🚀</h1>
+      <p>4UPGRADE Website Submission</p>
+    </div>
+    <div class="body">
+      <table>
+        <tr><td>Name</td><td>${name}</td></tr>
+        <tr><td>Email</td><td>${email}</td></tr>
+        <tr><td>Phone</td><td>${phone}</td></tr>
+        <tr><td>Stage</td><td>${stage}</td></tr>
+        <tr><td>Interests</td><td>${interests.join(", ")}</td></tr>
+      </table>
+      ${message ? `<div class="message-box"><strong style="display:block;margin-bottom:6px;font-size:12px;color:#6b7280;">MESSAGE</strong>${message.replace(/\n/g, "<br/>")}</div>` : ""}
+    </div>
+  </div>
+</body>
+</html>
+`.trim();
+
+  // 3. Send emails
+  try {
+    // 3a. Acknowledgment email to the submitter (user) - no submission details included!
+    await transporter.sendMail({
+      from: `"${FROM_NAME}" <${RECIPIENT_EMAIL}>`,
+      replyTo: RECIPIENT_EMAIL,
+      to: email,                    // confirmation goes only to the person who submitted
+      subject: `We've received your enquiry — 4UPGRADE`,
+      text: ackTextBody,
+      html: ackHtmlBody,
+    });
+
+    // 3b. Detail notification email to the business inbox
+    await transporter.sendMail({
+      from: `"${FROM_NAME}" <${SMTP_USER}>`,
+      to: RECIPIENT_EMAIL,          // details go to the business recipient email
+      subject: `New Enquiry: ${name} (${stage})`,
+      text: leadTextBody,
+      html: leadHtmlBody,
+    });
+
+    console.log(`✅  Emails sent: Acknowledgment to ${email} | Details to ${RECIPIENT_EMAIL}`);
+    return res.status(200).json({ success: true, message: "Your enquiry has been received. We'll be in touch within one working day." });
+  } catch (err) {
+    console.error("❌  Failed to send email:", err);
+    return res.status(500).json({ success: false, message: "Could not send your enquiry right now. Please try again shortly." });
+  }
 });
+
+// ─── Start server ─────────────────────────────────────────────────────────────
+app.listen(PORT, () => {
+  console.log(`🚀  4UPGRADE API running on http://localhost:${PORT}`);
+  console.log(`    SMTP: ${SMTP_HOST}:${SMTP_PORT}`);
+  console.log(`    Confirmation → submitter's email  |  Lead Details → ${RECIPIENT_EMAIL}`);
+  console.log(`    CORS: ${CORS_ORIGIN || "* (open)"}`);
 });
