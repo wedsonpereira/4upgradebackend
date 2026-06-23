@@ -25,9 +25,9 @@ app.post("/api/contact", async (req, res) => {
 
   try {
     const info = await transporter.sendMail({
-      from: '"4Upgrade" pereirawedson1996@gmail.com',
+      from: `"4Upgrade" ${process.env.SMTP_USER}`,
       to: email.toLowerCase(),
-      subject: `User Form Submitted details`,
+      subject: `Form Submission details`,
       html: `
 <!DOCTYPE html>
 <html>
