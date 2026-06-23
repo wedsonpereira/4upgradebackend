@@ -4,29 +4,89 @@ const app = express();
 require('dotenv').config();
 const cors = require("cors");
 app.use(express.json());
-app.use(cors(origin= "https://4upgrade.in"));
 
-app.listen(process.env.PORT | 3000, () => {
-  console.log("Listening on port " + process.env.PORT | 3000);
-})
+const allowedOrigins = (process.env.CORS_ORIGINS || "https://4upgrade.in,https://www.4upgrade.in")
+  .split(",")
+  .map((origin) => origin.trim());
+
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error("Not allowed by CORS"));
+  },
+}));
+
+const port = process.env.PORT || 3000;
+
+app.listen(port, () => {
+  console.log("Listening on port " + port);
+});
+
+const smtpPort = Number(process.env.SMTP_PORT) || 465;
 
 const transporter=nodemailer.createTransport({
   host: process.env.SMTP_HOST,
-  port: process.env.SMTP_PORT,
+  port: smtpPort,
   auth: {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS
   },
-  secure: true
+  secure: smtpPort === 465,
+  connectionTimeout: 10000,
+  greetingTimeout: 10000,
+  socketTimeout: 15000,
 })
+
+const escapeHtml = (value = "") =>
+  String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 
 app.post("/api/contact", async (req, res) => {
   const { name, email, phone, stage, interests, message } = req.body;
+  const recipient = process.env.CONTACT_EMAIL || process.env.SMTP_USER;
+
+  if (!name || !email || !message) {
+    return res.status(400).json({
+      success: false,
+      error: "Name, email, and message are required",
+    });
+  }
+
+  if (typeof email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({
+      success: false,
+      error: "A valid email is required",
+    });
+  }
+
+  if (!recipient) {
+    return res.status(500).json({
+      success: false,
+      error: "Contact email is not configured",
+    });
+  }
+
+  if (!process.env.SMTP_USER) {
+    return res.status(500).json({
+      success: false,
+      error: "SMTP user is not configured",
+    });
+  }
+
+  const formattedInterests = Array.isArray(interests) ? interests.join(", ") : interests;
 
   try {
     const info = await transporter.sendMail({
-      from: `"4Upgrade" ${process.env.SMTP_USER}`,
-      to: email.toLowerCase(),
+      from: `"4Upgrade" <${process.env.SMTP_USER}>`,
+      to: recipient,
+      replyTo: email.toLowerCase(),
       subject: `Form Submission details`,
       html: `
 <!DOCTYPE html>
@@ -73,7 +133,7 @@ app.post("/api/contact", async (req, res) => {
                   Full Name
                 </td>
                 <td style="border:1px solid #e2e8f0;">
-                  ${name}
+                  ${escapeHtml(name)}
                 </td>
               </tr>
 
@@ -82,7 +142,7 @@ app.post("/api/contact", async (req, res) => {
                   Email Address
                 </td>
                 <td style="border:1px solid #e2e8f0;">
-                  ${email}
+                  ${escapeHtml(email)}
                 </td>
               </tr>
 
@@ -91,7 +151,7 @@ app.post("/api/contact", async (req, res) => {
                   Phone Number
                 </td>
                 <td style="border:1px solid #e2e8f0;">
-                  ${phone}
+                  ${escapeHtml(phone)}
                 </td>
               </tr>
 
@@ -100,7 +160,7 @@ app.post("/api/contact", async (req, res) => {
                   Project Stage
                 </td>
                 <td style="border:1px solid #e2e8f0;">
-                  ${stage}
+                  ${escapeHtml(stage)}
                 </td>
               </tr>
 
@@ -109,7 +169,7 @@ app.post("/api/contact", async (req, res) => {
                   Interests
                 </td>
                 <td style="border:1px solid #e2e8f0;">
-                  ${Array.isArray(interests) ? interests.join(", ") : interests}
+                  ${escapeHtml(formattedInterests)}
                 </td>
               </tr>
 
@@ -118,7 +178,7 @@ app.post("/api/contact", async (req, res) => {
                   Message
                 </td>
                 <td style="border:1px solid #e2e8f0;white-space:pre-wrap;">
-                  ${message}
+                  ${escapeHtml(message)}
                 </td>
               </tr>
 
@@ -143,7 +203,12 @@ app.post("/api/contact", async (req, res) => {
 
 </body>
 </html> `,
-      text: `And Nothing goes out`,
+      text: `New enquiry from ${name} (${email})
+Phone: ${phone || ""}
+Project Stage: ${stage || ""}
+Interests: ${formattedInterests || ""}
+
+${message}`,
     });
 
     console.log(info);
@@ -162,6 +227,3 @@ app.post("/api/contact", async (req, res) => {
     });
   }
 });
-
-
-
