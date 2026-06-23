@@ -1,23 +1,30 @@
 const nodemailer = require("nodemailer");
 const express = require("express");
 const app = express();
-require('dotenv').config();
+require("dotenv").config();
 const cors = require("cors");
+const { z } = require("zod");
 app.use(express.json());
 
-const allowedOrigins = (process.env.CORS_ORIGINS || "https://4upgrade.in,https://www.4upgrade.in")
+const allowedOrigins = (
+  process.env.CORS_ORIGINS ||
+  process.env.CORS_ORIGIN ||
+  "https://4upgrade.in,https://www.4upgrade.in"
+)
   .split(",")
   .map((origin) => origin.trim());
 
-app.use(cors({
-  origin(origin, callback) {
-    if (!origin || allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
 
-    return callback(new Error("Not allowed by CORS"));
-  },
-}));
+      return callback(new Error("Not allowed by CORS"));
+    },
+  }),
+);
 
 const port = process.env.PORT || 3000;
 
@@ -26,19 +33,23 @@ app.listen(port, () => {
 });
 
 const smtpPort = Number(process.env.SMTP_PORT) || 465;
+const smtpSecure =
+  process.env.SMTP_SECURE === undefined
+    ? smtpPort === 465
+    : process.env.SMTP_SECURE === "true";
 
-const transporter=nodemailer.createTransport({
+const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
   port: smtpPort,
   auth: {
     user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS
+    pass: process.env.SMTP_PASS,
   },
-  secure: smtpPort === 465,
+  secure: smtpSecure,
   connectionTimeout: 10000,
   greetingTimeout: 10000,
   socketTimeout: 15000,
-})
+});
 
 const escapeHtml = (value = "") =>
   String(value)
@@ -48,43 +59,62 @@ const escapeHtml = (value = "") =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
 
+const contactSchema = z.object({
+  name: z.string().trim().min(2, "Please enter your full name").max(80),
+  email: z.string().trim().email("Enter a valid email").max(160),
+  phone: z.string().trim().min(7, "Enter a valid phone number").max(20),
+  stage: z.string().trim().min(1, "Please select your stage"),
+  interests: z.array(z.string()).min(1, "Pick at least one area"),
+  message: z.string().trim().max(600).optional().default(""),
+});
+
+const getFieldErrors = (issues) =>
+  issues.reduce((errors, issue) => {
+    const field = issue.path[0];
+    if (field && !errors[field]) {
+      errors[field] = issue.message;
+    }
+
+    return errors;
+  }, {});
+
 app.post("/api/contact", async (req, res) => {
-  const { name, email, phone, stage, interests, message } = req.body;
-  const recipient = process.env.CONTACT_EMAIL || process.env.SMTP_USER;
+  const parsed = contactSchema.safeParse(req.body);
 
-  if (!name || !email || !message) {
-    return res.status(400).json({
+  if (!parsed.success) {
+    return res.status(422).json({
       success: false,
-      error: "Name, email, and message are required",
+      message: "Please check the highlighted fields.",
+      errors: getFieldErrors(parsed.error.issues),
     });
   }
 
-  if (typeof email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    return res.status(400).json({
-      success: false,
-      error: "A valid email is required",
-    });
-  }
+  const { name, email, phone, stage, interests, message } = parsed.data;
+  const recipient =
+    process.env.CONTACT_EMAIL ||
+    process.env.RECIPIENT_EMAIL ||
+    process.env.SMTP_USER;
+  const fromName = process.env.FROM_NAME || "4Upgrade";
 
   if (!recipient) {
     return res.status(500).json({
       success: false,
-      error: "Contact email is not configured",
+      message: "Contact email is not configured",
     });
   }
 
   if (!process.env.SMTP_USER) {
     return res.status(500).json({
       success: false,
-      error: "SMTP user is not configured",
+      message: "SMTP user is not configured",
     });
   }
 
-  const formattedInterests = Array.isArray(interests) ? interests.join(", ") : interests;
+  const formattedInterests = interests.join(", ");
 
   try {
     const info = await transporter.sendMail({
-      from: `"4Upgrade" <${process.env.SMTP_USER}>`,
+      from: `"${fromName}" <${process.env.SMTP_USER}>`,
       to: recipient,
       replyTo: email.toLowerCase(),
       subject: `Form Submission details`,
@@ -217,13 +247,12 @@ ${message}`,
       success: true,
       message: "Message sent",
     });
-
   } catch (ex) {
     console.log("This is the error", ex);
 
     return res.status(500).json({
       success: false,
-      error: ex.message,
+      message: "Unable to send your message right now. Please try again later.",
     });
   }
 });
