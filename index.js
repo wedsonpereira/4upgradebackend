@@ -6,7 +6,7 @@ const cors = require("cors");
 app.use(express.json());
 
 
-app.use(cors("https://4upgrade.in"))
+app.use(cors("https://localhost:5173"));
 
 const port = process.env.PORT || 3000;
 
@@ -23,6 +23,10 @@ const transporter = nodemailer.createTransport({
   },
   secure: true,
 });
+
+app.get("/", (req, res) => {
+    return res.status(200).send("Welcome");
+})
 
 app.post("/api/contact", async (req, res) => {
 
