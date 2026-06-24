@@ -1,4 +1,5 @@
-const nodemailer = require("nodemailer");
+import { Resend } from 'resend';
+const  resend=new Resend(process.env.API_KEY);
 const express = require("express");
 const app = express();
 require("dotenv").config();
@@ -6,7 +7,7 @@ const cors = require("cors");
 app.use(express.json());
 
 
-app.use(cors("https://localhost:5173"));
+app.use(cors("https://4upgrade.in"));
 
 const port = process.env.PORT || 3000;
 
@@ -14,16 +15,6 @@ app.listen(port, () => {
   console.log("Listening on port " + port);
 });
 
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port:process.env.SMTP_PORT,
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-  secure: process.env.SMTP_SECURE,
-    requireTLS:process.env.TLS_ENABLED,
-});
 
 app.get("/", (req, res) => {
     return res.status(200).send("Welcome");
@@ -38,7 +29,7 @@ app.post("/api/contact", async (req, res) => {
 
     const { name, email, phone,stage,interests,message} = req.body;
 
-  await transporter.sendMail({
+  await resend.emails.send({
     from: `4upgrade ${process.env.SMTP_USER}`,
     to: email,
     subject: `Form Submission details`,
