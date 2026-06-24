@@ -28,6 +28,11 @@ app.get("/", (req, res) => {
     return res.status(200).send("Welcome");
 })
 
+
+app.get("/node-version", (req, res) => {
+    res.send(process.version);
+});
+
 app.post("/api/contact", async (req, res) => {
 
     const { name, email, phone,stage,interests,message} = req.body;
