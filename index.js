@@ -1,11 +1,11 @@
-import { Resend } from 'resend';
+require('dotenv').config();
+const {Resend}= require('resend');
 const  resend=new Resend(process.env.API_KEY);
 const express = require("express");
 const app = express();
-require("dotenv").config();
+
 const cors = require("cors");
 app.use(express.json());
-
 
 app.use(cors("https://4upgrade.in"));
 
